@@ -139,6 +139,45 @@ def obtener_reserva(reserva_id):
     finally:
         conn.close()
 
+# NUEVO ENDPOINT: Historial de reservas del usuario en sesión
+@reservas_bp.route("/reservas/mis-reservas", methods=["GET"])
+@token_requerido
+def listar_mis_reservas():
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT r.id, r.codigo_reserva, r.cantidad_asientos, r.subtotal, r.iva, r.total,
+                       r.estado, r.fecha_reserva, r.asientos,
+                       v.origen, v.destino, v.fecha, v.hora_salida, v.precio
+                FROM reservas r
+                JOIN vuelos v ON r.vuelo_id = v.id
+                WHERE r.usuario_id = %s
+                ORDER BY r.fecha_reserva DESC
+                """,
+                (request.user_id,)
+            )
+            reservas = cur.fetchall()
+
+            for r in reservas:
+                if isinstance(r["fecha"], (datetime, date)):
+                    r["fecha"] = r["fecha"].strftime("%Y-%m-%d")
+                if isinstance(r["fecha_reserva"], (datetime, date)):
+                    r["fecha_reserva"] = r["fecha_reserva"].strftime("%Y-%m-%d %H:%M:%S")
+
+                r["hora_salida"] = str(r["hora_salida"])
+                r["precio"] = float(r["precio"])
+                r["subtotal"] = float(r["subtotal"])
+                r["iva"] = float(r["iva"])
+                r["total"] = float(r["total"])
+
+            return jsonify(reservas), 200
+    except Exception as e:
+        return jsonify({"estado": "error", "mensaje": f"Error al consultar reservas: {str(e)}"}), 500
+    finally:
+        conn.close()
+
 @reservas_bp.route("/reservas/<int:reserva_id>/comprobante-xml", methods=["GET"])
 @token_requerido
 def generar_comprobante_xml(reserva_id):

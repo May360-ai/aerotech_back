@@ -18,12 +18,13 @@ def registrar_usuario():
     if not all([nombre, correo, cedula_ruc, password]):
         return jsonify({
             "estado": "error", 
-            "mensaje": "Todos los campos (nombre, correo, cedula_ruc, password) son obligatorios"
+            "mensaje": "Todos los campos son obligatorios"
         }), 400
 
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
+            # 1. Validar correo duplicado
             cur.execute("SELECT id FROM usuarios WHERE correo = %s", (correo,))
             if cur.fetchone():
                 return jsonify({
@@ -31,6 +32,15 @@ def registrar_usuario():
                     "mensaje": "El correo electrónico ya se encuentra registrado"
                 }), 409
 
+            # 2. VALIDAR CÉDULA O RUC DUPLICADA
+            cur.execute("SELECT id FROM usuarios WHERE cedula_ruc = %s", (cedula_ruc,))
+            if cur.fetchone():
+                return jsonify({
+                    "estado": "error", 
+                    "mensaje": "El número de cédula o RUC ya pertenece a otra cuenta registrada"
+                }), 409
+
+            # Registrar usuario
             pwd_hash = hash_password(password)
             cur.execute(
                 """
@@ -51,6 +61,12 @@ def registrar_usuario():
 
     except Exception as e:
         conn.rollback()
+        # Captura por si salta la restricción de unicidad en base de datos
+        if "uq_usuarios_cedula_ruc" in str(e).lower():
+            return jsonify({
+                "estado": "error", 
+                "mensaje": "La cédula o RUC ingresada ya existe en el sistema"
+            }), 409
         return jsonify({"estado": "error", "mensaje": f"Error interno: {str(e)}"}), 500
     finally:
         conn.close()
