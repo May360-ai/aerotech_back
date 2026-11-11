@@ -11,21 +11,20 @@ def listar_vuelos():
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, origen, destino, fecha, hora_salida, hora_llegada, 
-                       precio, asientos_disponibles, 
+                SELECT id, origen, destino, fecha, 
+                       COALESCE(fecha_llegada, fecha) AS fecha_llegada,
+                       hora_salida, hora_llegada, precio, asientos_disponibles, 
                        COALESCE(asientos_totales, 40) AS asientos_totales
                 FROM vuelos 
-                WHERE asientos_disponibles > 0 
+                WHERE activo = true AND asientos_disponibles > 0 
                 ORDER BY fecha ASC, hora_salida ASC
                 """
             )
             vuelos = cur.fetchall()
 
             for v in vuelos:
-                if isinstance(v["fecha"], (datetime, date)):
-                    v["fecha"] = v["fecha"].strftime("%Y-%m-%d")
-                else:
-                    v["fecha"] = str(v["fecha"])
+                v["fecha"] = str(v["fecha"])
+                v["fecha_llegada"] = str(v["fecha_llegada"])
                 v["hora_salida"] = str(v["hora_salida"])
                 v["hora_llegada"] = str(v["hora_llegada"])
                 v["precio"] = float(v["precio"])
@@ -37,7 +36,7 @@ def listar_vuelos():
         return jsonify({"estado": "error", "mensaje": f"Error al consultar vuelos: {str(e)}"}), 500
     finally:
         conn.close()
-
+        
 @vuelos_bp.route("/vuelos/<int:vuelo_id>/asientos-ocupados", methods=["GET"])
 def obtener_asientos_ocupados(vuelo_id):
     conn = get_db_connection()
