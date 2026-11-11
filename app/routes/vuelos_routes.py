@@ -34,3 +34,30 @@ def listar_vuelos():
         return jsonify({"estado": "error", "mensaje": f"Error al consultar vuelos: {str(e)}"}), 500
     finally:
         conn.close()
+
+@vuelos_bp.route("/vuelos/<int:vuelo_id>/asientos-ocupados", methods=["GET"])
+def obtener_asientos_ocupados(vuelo_id):
+    conn = get_db_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT asientos 
+                FROM reservas 
+                WHERE vuelo_id = %s AND estado != 'cancelada' AND asientos IS NOT NULL
+                """,
+                (vuelo_id,)
+            )
+            reservas = cur.fetchall()
+
+            asientos_ocupados = []
+            for r in reservas:
+                if r.get("asientos"):
+                    items = [a.strip() for a in r["asientos"].split(",") if a.strip()]
+                    asientos_ocupados.extend(items)
+
+            return jsonify({"asientos_ocupados": asientos_ocupados}), 200
+    except Exception as e:
+        return jsonify({"estado": "error", "mensaje": str(e)}), 500
+    finally:
+        conn.close()

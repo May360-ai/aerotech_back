@@ -12,14 +12,18 @@ reservas_bp = Blueprint("reservas_bp", __name__)
 def crear_reserva():
     datos = request.get_json(silent=True) or {}
     vuelo_id = datos.get("vuelo_id")
-    cantidad = datos.get("cantidad", 1)
+    asientos_solicitados = datos.get("asientos", [])
 
-    try:
-        cantidad = int(cantidad)
-        if cantidad <= 0:
-            return jsonify({"estado": "error", "mensaje": "La cantidad de asientos debe ser mayor a 0"}), 400
-    except (ValueError, TypeError):
-        return jsonify({"estado": "error", "mensaje": "La cantidad debe ser un número entero válido"}), 400
+    if isinstance(asientos_solicitados, list) and len(asientos_solicitados) > 0:
+        cantidad = len(asientos_solicitados)
+    else:
+        try:
+            cantidad = int(datos.get("cantidad", 1))
+        except (ValueError, TypeError):
+            cantidad = 1
+
+    if cantidad <= 0:
+        return jsonify({"estado": "error", "mensaje": "Debe seleccionar al menos un asiento"}), 400
 
     conn = get_db_connection()
     try:
@@ -33,8 +37,30 @@ def crear_reserva():
             if vuelo["asientos_disponibles"] < cantidad:
                 return jsonify({
                     "estado": "error",
-                    "mensaje": f"Cupos insuficientes. Solo quedan {vuelo['asientos_disponibles']} asientos disponibles."
+                    "mensaje": f"Solo quedan {vuelo['asientos_disponibles']} asientos disponibles."
                 }), 409
+
+            if asientos_solicitados:
+                cur.execute(
+                    """
+                    SELECT asientos FROM reservas 
+                    WHERE vuelo_id = %s AND estado != 'cancelada' AND asientos IS NOT NULL
+                    """,
+                    (vuelo_id,)
+                )
+                reservas_existentes = cur.fetchall()
+                ya_ocupados = set()
+                for r in reservas_existentes:
+                    if r.get("asientos"):
+                        ya_ocupados.update([a.strip() for a in r["asientos"].split(",") if a.strip()])
+
+                colisiones = [a for a in asientos_solicitados if a in ya_ocupados]
+                if colisiones:
+                    conn.rollback()
+                    return jsonify({
+                        "estado": "error",
+                        "mensaje": f"El/los asiento(s) {', '.join(colisiones)} acaban de ser reservados por otro usuario."
+                    }), 409
 
             cur.execute(
                 """
@@ -45,26 +71,20 @@ def crear_reserva():
                 (cantidad, vuelo_id, cantidad)
             )
 
-            if cur.rowcount == 0:
-                conn.rollback()
-                return jsonify({
-                    "estado": "error", 
-                    "mensaje": "Conflicto de concurrencia: Los cupos acaban de agotarse."
-                }), 409
-
             precio_unitario = float(vuelo["precio"])
             subtotal = round(precio_unitario * cantidad, 2)
             iva = round(subtotal * Config.IVA_PORCENTAJE, 2)
             total = round(subtotal + iva, 2)
             codigo = f"TICK-{int(datetime.now().timestamp())}"
+            cadena_asientos = ", ".join(asientos_solicitados) if asientos_solicitados else f"{cantidad} Asiento(s)"
 
             cur.execute(
                 """
-                INSERT INTO reservas (codigo_reserva, usuario_id, vuelo_id, cantidad_asientos, subtotal, iva, total, estado)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, 'confirmada')
-                RETURNING id, codigo_reserva, subtotal, iva, total, estado
+                INSERT INTO reservas (codigo_reserva, usuario_id, vuelo_id, cantidad_asientos, subtotal, iva, total, estado, asientos)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'confirmada', %s)
+                RETURNING id, codigo_reserva, subtotal, iva, total, estado, asientos
                 """,
-                (codigo, request.user_id, vuelo_id, cantidad, subtotal, iva, total)
+                (codigo, request.user_id, vuelo_id, cantidad, subtotal, iva, total, cadena_asientos)
             )
             reserva = cur.fetchone()
             conn.commit()
@@ -79,7 +99,7 @@ def crear_reserva():
 
     except Exception as e:
         conn.rollback()
-        return jsonify({"estado": "error", "mensaje": f"Error interno en la reserva: {str(e)}"}), 500
+        return jsonify({"estado": "error", "mensaje": f"Error interno: {str(e)}"}), 500
     finally:
         conn.close()
 
@@ -116,8 +136,6 @@ def obtener_reserva(reserva_id):
             r["total"] = float(r["total"])
 
             return jsonify(r), 200
-    except Exception as e:
-        return jsonify({"estado": "error", "mensaje": str(e)}), 500
     finally:
         conn.close()
 
@@ -144,7 +162,5 @@ def generar_comprobante_xml(reserva_id):
 
             xml_salida = construir_comprobante_xml(r)
             return Response(xml_salida, mimetype="application/xml")
-    except Exception as e:
-        return jsonify({"estado": "error", "mensaje": f"Error al generar XML: {str(e)}"}), 500
     finally:
         conn.close()

@@ -25,12 +25,14 @@ def construir_comprobante_xml(reserva_data: dict) -> str:
     ET.SubElement(pasajero, "Nombre").text = str(reserva_data.get("usuario_nombre", ""))
     ET.SubElement(pasajero, "CedulaRUC").text = str(reserva_data.get("cedula_ruc", ""))
     ET.SubElement(pasajero, "Correo").text = str(reserva_data.get("correo", ""))
-
+# Reemplaza la sección 3 de construir_comprobante_xml:
+    # 3. Detalle del Vuelo Reservado
     vuelo = ET.SubElement(ticket, "DetalleVuelo")
     ET.SubElement(vuelo, "Ruta").text = f"{reserva_data.get('origen')} -> {reserva_data.get('destino')}"
     ET.SubElement(vuelo, "FechaVuelo").text = _formatear_fecha(reserva_data.get("fecha"), "%Y-%m-%d")
     ET.SubElement(vuelo, "HoraSalida").text = str(reserva_data.get("hora_salida", ""))
     ET.SubElement(vuelo, "AsientosReservados").text = str(reserva_data.get("cantidad_asientos", 1))
+    ET.SubElement(vuelo, "AsientosAsignados").text = str(reserva_data.get("asientos", "N/A"))
     ET.SubElement(vuelo, "PrecioUnitario").text = f"{float(reserva_data.get('precio', 0.0)):.2f}"
 
     totales = ET.SubElement(ticket, "Totales")
