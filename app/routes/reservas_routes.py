@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 from flask import Blueprint, request, jsonify, Response
 from database import get_db_connection
 from app.middlewares.auth import token_requerido
@@ -17,27 +17,40 @@ def crear_reserva():
     try:
         cantidad = int(cantidad)
         if cantidad <= 0:
-            return jsonify({"estado": "error", "mensaje": "La cantidad debe ser mayor a 0"}), 400
-    except ValueError:
-        return jsonify({"estado": "error", "mensaje": "Cantidad no numérica"}), 400
+            return jsonify({"estado": "error", "mensaje": "La cantidad de asientos debe ser mayor a 0"}), 400
+    except (ValueError, TypeError):
+        return jsonify({"estado": "error", "mensaje": "La cantidad debe ser un número entero válido"}), 400
 
     conn = get_db_connection()
     try:
         with conn.cursor() as cur:
-            # Control de concurrencia: bloquea la fila del vuelo hasta finalizar la transacción
             cur.execute("SELECT * FROM vuelos WHERE id = %s FOR UPDATE", (vuelo_id,))
             vuelo = cur.fetchone()
 
             if not vuelo:
-                return jsonify({"estado": "error", "mensaje": "Vuelo no encontrado"}), 404
+                return jsonify({"estado": "error", "mensaje": "El vuelo seleccionado no existe"}), 404
 
             if vuelo["asientos_disponibles"] < cantidad:
-                return jsonify({"estado": "error", "mensaje": "Asientos insuficientes"}), 400
+                return jsonify({
+                    "estado": "error",
+                    "mensaje": f"Cupos insuficientes. Solo quedan {vuelo['asientos_disponibles']} asientos disponibles."
+                }), 409
 
             cur.execute(
-                "UPDATE vuelos SET asientos_disponibles = asientos_disponibles - %s WHERE id = %s",
-                (cantidad, vuelo_id)
+                """
+                UPDATE vuelos 
+                SET asientos_disponibles = asientos_disponibles - %s 
+                WHERE id = %s AND asientos_disponibles >= %s
+                """,
+                (cantidad, vuelo_id, cantidad)
             )
+
+            if cur.rowcount == 0:
+                conn.rollback()
+                return jsonify({
+                    "estado": "error", 
+                    "mensaje": "Conflicto de concurrencia: Los cupos acaban de agotarse."
+                }), 409
 
             precio_unitario = float(vuelo["precio"])
             subtotal = round(precio_unitario * cantidad, 2)
@@ -47,8 +60,8 @@ def crear_reserva():
 
             cur.execute(
                 """
-                INSERT INTO reservas (codigo_reserva, usuario_id, vuelo_id, cantidad_asientos, subtotal, iva, total)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO reservas (codigo_reserva, usuario_id, vuelo_id, cantidad_asientos, subtotal, iva, total, estado)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'confirmada')
                 RETURNING id, codigo_reserva, subtotal, iva, total, estado
                 """,
                 (codigo, request.user_id, vuelo_id, cantidad, subtotal, iva, total)
@@ -56,10 +69,17 @@ def crear_reserva():
             reserva = cur.fetchone()
             conn.commit()
 
-            return jsonify({"estado": "exito", "reserva": reserva}), 201
+            return jsonify({
+                "estado": "exito",
+                "mensaje": "Reserva creada con éxito",
+                "reserva_id": reserva["id"],
+                "total": total,
+                "reserva": reserva
+            }), 201
+
     except Exception as e:
         conn.rollback()
-        return jsonify({"estado": "error", "mensaje": str(e)}), 500
+        return jsonify({"estado": "error", "mensaje": f"Error interno en la reserva: {str(e)}"}), 500
     finally:
         conn.close()
 
@@ -84,15 +104,20 @@ def obtener_reserva(reserva_id):
             if not r:
                 return jsonify({"estado": "error", "mensaje": "Reserva no encontrada"}), 404
 
-            r["fecha"] = r["fecha"].strftime("%Y-%m-%d")
+            if isinstance(r["fecha"], (datetime, date)):
+                r["fecha"] = r["fecha"].strftime("%Y-%m-%d")
+            if isinstance(r["fecha_reserva"], (datetime, date)):
+                r["fecha_reserva"] = r["fecha_reserva"].strftime("%Y-%m-%d %H:%M:%S")
+
             r["hora_salida"] = str(r["hora_salida"])
-            r["fecha_reserva"] = r["fecha_reserva"].strftime("%Y-%m-%d %H:%M:%S")
             r["precio"] = float(r["precio"])
             r["subtotal"] = float(r["subtotal"])
             r["iva"] = float(r["iva"])
             r["total"] = float(r["total"])
 
             return jsonify(r), 200
+    except Exception as e:
+        return jsonify({"estado": "error", "mensaje": str(e)}), 500
     finally:
         conn.close()
 
@@ -119,5 +144,7 @@ def generar_comprobante_xml(reserva_id):
 
             xml_salida = construir_comprobante_xml(r)
             return Response(xml_salida, mimetype="application/xml")
+    except Exception as e:
+        return jsonify({"estado": "error", "mensaje": f"Error al generar XML: {str(e)}"}), 500
     finally:
         conn.close()
