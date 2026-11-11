@@ -12,7 +12,8 @@ def listar_vuelos():
             cur.execute(
                 """
                 SELECT id, origen, destino, fecha, hora_salida, hora_llegada, 
-                       precio, asientos_disponibles 
+                       precio, asientos_disponibles, 
+                       COALESCE(asientos_totales, 40) AS asientos_totales
                 FROM vuelos 
                 WHERE asientos_disponibles > 0 
                 ORDER BY fecha ASC, hora_salida ASC
@@ -28,6 +29,8 @@ def listar_vuelos():
                 v["hora_salida"] = str(v["hora_salida"])
                 v["hora_llegada"] = str(v["hora_llegada"])
                 v["precio"] = float(v["precio"])
+                v["asientos_disponibles"] = int(v["asientos_disponibles"])
+                v["asientos_totales"] = int(v["asientos_totales"])
 
             return jsonify(vuelos), 200
     except Exception as e:
